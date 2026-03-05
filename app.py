@@ -4,102 +4,113 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import norm
 
-st.set_page_config(page_title="進階非對稱公差分析", layout="wide")
+st.set_page_config(page_title="專業公差分析工具", layout="wide")
 
-st.title("📏 進階公差分析 (支援非對稱公差與 Cpk)")
-st.write("各零件可獨立設定上/下公差，系統將自動計算成品目標界限。")
+st.title("📏 零件 vs 成品規格公差分析")
+st.write("設定各零件公差，並自定義成品的「目標規格界限」，自動計算 Cpk 與良率。")
 
-# 1. 側邊欄：全局設定
+# 1. 側邊欄：成品目標規格設定 (Spec Limits)
 with st.sidebar:
-    st.header("⚙️ 全局設定")
-    target_cpk = st.number_input("成品目標 Cpk", value=1.0, min_value=0.1, step=0.1)
-    st.info("計算 RSS 時，會依據此 Cpk 縮放統計公差界限。")
+    st.header("🎯 成品目標規格 (Spec)")
+    spec_nominal = st.number_input("成品名義尺寸目標", value=30.0, step=0.1, format="%.3f")
+    spec_upper_limit = st.number_input("成品允收上公差 (+)", value=0.20, min_value=0.0, step=0.01, format="%.3f")
+    spec_lower_limit = st.number_input("成品允收下公差 (-)", value=0.20, min_value=0.0, step=0.01, format="%.3f")
+    
+    st.divider()
+    st.info(f"成品規格範圍：\n{spec_nominal - spec_lower_limit:.3f} ~ {spec_nominal + spec_upper_limit:.3f}")
 
-# 2. 資料輸入區
-st.subheader("1. 輸入零件公差資料")
+# 2. 零件資料輸入
+st.subheader("1. 輸入各零件公差 (零件層級)")
 num_parts = st.number_input("零件數量", min_value=1, max_value=50, value=3)
 
-# 建立預設表格（拆分上下公差）
 default_data = pd.DataFrame({
     "零件名稱": [f"Part {i+1}" for i in range(num_parts)],
     "名義尺寸": [10.0] * num_parts,
     "上公差 (+)": [0.05] * num_parts,
-    "下公差 (-)": [0.02] * num_parts,
+    "下公差 (-)": [0.05] * num_parts,
     "零件 Cpk": [1.0] * num_parts
 })
 
 edited_df = st.data_editor(default_data, num_rows="dynamic", use_container_width=True)
 
 # 3. 分析計算
-if st.button("🚀 執行非對稱分析", type="primary"):
+if st.button("🚀 執行公差對比分析", type="primary"):
     nominals = edited_df["名義尺寸"].values
     u_tols = edited_df["上公差 (+)"].values
     l_tols = edited_df["下公差 (-)"].values
     cpks = edited_df["零件 Cpk"].values
     
-    # --- 計算 Worst Case ---
+    # --- A. 零件疊加計算 ---
     total_nom = np.sum(nominals)
-    total_wc_upper = np.sum(u_tols)
-    total_wc_lower = np.sum(l_tols)
-    
-    # --- 計算 RSS (統計公差) ---
-    # 對於非對稱公差，RSS 通常分別計算上限與下限的平方和
-    # 計算各零件單邊的 Sigma: σ = Tolerance / (3 * Cpk)
+    # Worst Case
+    wc_upper = np.sum(u_tols)
+    wc_lower = np.sum(l_tols)
+    # RSS (Sigma 計算)
     sigmas_u = u_tols / (3 * cpks)
     sigmas_l = l_tols / (3 * cpks)
-    
     total_sigma_u = np.sqrt(np.sum(sigmas_u**2))
     total_sigma_l = np.sqrt(np.sum(sigmas_l**2))
-    
-    # 根據目標 Cpk 計算統計界限
-    rss_upper = total_sigma_u * (3 * target_cpk)
-    rss_lower = total_sigma_l * (3 * target_cpk)
 
-    # 4. 顯示結果卡片
+    # --- B. 對比成品規格 (Spec Limits) ---
+    USL = spec_nominal + spec_upper_limit
+    LSL = spec_nominal - spec_lower_limit
+    
+    # 計算相對於成品目標的位移 (Shift)
+    # 如果零件疊加的名義總和與成品目標名義尺寸不同，會產生偏移
+    mean_shift = total_nom - spec_nominal
+    
+    # 計算成品 Cpk
+    # Cpk = min( (USL - Mean)/3sigma, (Mean - LSL)/3sigma )
+    cpk_u = (spec_upper_limit - mean_shift) / (3 * total_sigma_u)
+    cpk_l = (spec_lower_limit + mean_shift) / (3 * total_sigma_l)
+    final_cpk = min(cpk_u, cpk_l)
+    
+    # 計算良率
+    yield_u = norm.cdf(spec_upper_limit, mean_shift, total_sigma_u)
+    yield_l = norm.cdf(-spec_lower_limit, mean_shift, total_sigma_l)
+    total_yield = (yield_u - yield_l) * 100
+
+    # 4. 顯示結果
     st.divider()
-    st.subheader("2. 分析結果總結")
+    st.subheader("2. 分析結果對比")
     
-    c1, c2, c3 = st.columns(3)
-    c1.metric("總名義尺寸 (Nominal)", f"{total_nom:.3f} mm")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("零件疊加總尺寸", f"{total_nom:.3f} mm", f"偏離目標 {mean_shift:.3f}", delta_color="inverse")
+    c2.metric("成品預估 Cpk", f"{final_cpk:.3f}")
+    c3.metric("預估良率 (Yield)", f"{total_yield:.4f} %")
     
-    # Worst Case 顯示
-    wc_text = f"+{total_wc_upper:.3f} / -{total_wc_lower:.3f}"
-    c2.metric("Worst Case 總界限", wc_text)
-    
-    # RSS 顯示
-    rss_text = f"+{rss_upper:.3f} / -{rss_lower:.3f}"
-    c3.metric(f"RSS 統計界限 (Cpk={target_cpk})", rss_text)
+    # 判斷 Worst Case 是否爆表
+    is_wc_ok = (total_nom + wc_upper <= USL) and (total_nom - wc_lower >= LSL)
+    c4.metric("Worst Case 判定", "通過" if is_wc_ok else "超出規格", delta_color="normal" if is_wc_ok else "inverse")
 
-    # 5. 良率評估 (採用較差的那一邊作為保守估計)
-    avg_total_sigma = (total_sigma_u + total_sigma_l) / 2
-    # 簡化模型：計算在 RSS 界限內的機率
-    yield_u = norm.cdf(rss_upper, 0, total_sigma_u)
-    yield_l = norm.cdf(rss_lower, 0, total_sigma_l)
-    total_yield = (yield_u + yield_l - 1) * 100
+    # 5. 視覺化：零件分佈 vs 成品規格
+    st.subheader("3. 尺寸分佈與成品規格界限對比")
     
-    st.info(f"💡 預估組裝良率：**{total_yield:.4f}%** (基於非對稱分佈模型)")
-
-    # 6. 視覺化圖表
-    st.subheader("3. 尺寸分佈圖 (非對稱分佈)")
+    # 繪圖範圍
+    plot_min = min(LSL, total_nom - 4*total_sigma_l)
+    plot_max = max(USL, total_nom + 4*total_sigma_u)
+    x = np.linspace(plot_min - 0.1, plot_max + 0.1, 500)
     
-    # 繪圖範圍：取較大的那一邊擴張
-    max_range = max(rss_upper, rss_lower) * 1.5
-    x = np.linspace(total_nom - max_range, total_nom + max_range, 400)
-    
-    # 建立一個簡單的非對稱正態分佈模擬 (分段正態)
+    # 分佈曲線
     y = np.where(x < total_nom, 
                  norm.pdf(x, total_nom, total_sigma_l), 
                  norm.pdf(x, total_nom, total_sigma_u))
     
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(x, y, color='#2E86C1', lw=2)
-    ax.fill_between(x, y, alpha=0.3, color='#2E86C1')
+    fig, ax = plt.subplots(figsize=(12, 5))
+    ax.plot(x, y, color='#2E86C1', lw=2, label='Assembly Distribution')
+    ax.fill_between(x, y, alpha=0.2, color='#2E86C1')
     
-    # 畫出 RSS 上下限
-    ax.axvline(total_nom + rss_upper, color='red', linestyle='--', label=f'Upper Limit (+{rss_upper:.3f})')
-    ax.axvline(total_nom - rss_lower, color='red', linestyle='--', label=f'Lower Limit (-{rss_lower:.3f})')
+    # 畫出成品 Spec Limits (目標規格)
+    ax.axvline(USL, color='red', lw=2, label=f'Spec Upper ({USL:.3f})')
+    ax.axvline(LSL, color='red', lw=2, label=f'Spec Lower ({LSL:.3f})')
     
-    ax.set_title("Assembly Dimension Distribution (Asymmetric)")
+    # 畫出 Worst Case 範圍 (陰影)
+    ax.axvspan(total_nom - wc_lower, total_nom + wc_upper, color='gray', alpha=0.1, label='Worst Case Range')
+    
+    ax.set_title("Distribution vs. Product Specifications")
     ax.set_xlabel("Dimension (mm)")
-    ax.legend()
+    ax.legend(loc='upper right')
     st.pyplot(fig)
+
+    if not is_wc_ok:
+        st.warning("⚠️ 注意：Worst Case 計算結果已超出成品規格上限或下限。")
