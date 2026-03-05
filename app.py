@@ -28,7 +28,7 @@ default_data = pd.DataFrame({
     "名義尺寸": [10.0] * num_parts,
     "上公差 (+)": [0.05] * num_parts,
     "下公差 (-)": [0.05] * num_parts,
-    "零件 Cpk": [1.0] * num_parts
+    "零件 Cpk": [1.33] * num_parts
 })
 
 edited_df = st.data_editor(default_data, num_rows="dynamic", use_container_width=True)
