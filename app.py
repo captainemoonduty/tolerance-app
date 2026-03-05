@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import norm
 
-st.set_page_config(page_title="專業公差分析工具", layout="wide")
+st.set_page_config(page_title="不專業公差分析工具", layout="wide")
 
 st.title("📏 零件 vs 成品規格公差分析")
 st.write("設定各零件公差，並自定義成品的「目標規格界限」，自動計算 Cpk 與良率。")
