@@ -4,11 +4,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import norm
 
-st.set_page_config(page_title="不專業公差分析工具", layout="wide")
+st.set_page_config(page_title="專業公差分析工具", layout="wide")
 
 st.title("📏 零件 vs 成品規格公差分析")
 
-# 1. 零件資料輸入 (先輸入零件，以便計算總和)
+# 1. 零件資料輸入
 st.subheader("1. 輸入各零件公差 (零件層級)")
 num_parts = st.number_input("零件數量", min_value=1, max_value=50, value=3)
 
@@ -18,7 +18,7 @@ default_data = pd.DataFrame({
     "名義尺寸": [10.0] * num_parts,
     "上公差 (+)": [0.05] * num_parts,
     "下公差 (-)": [0.05] * num_parts,
-    "零件 Cpk": [1.33] * num_parts
+    "零件 Cpk": [1.0] * num_parts
 })
 
 edited_df = st.data_editor(default_data, num_rows="dynamic", use_container_width=True)
@@ -30,13 +30,14 @@ total_nom_sum = edited_df["名義尺寸"].sum()
 with st.sidebar:
     st.header("🎯 成品目標規格 (Spec)")
     
-    # 新增自動計算開關
     auto_calc = st.checkbox("自動連動零件尺寸總和", value=True)
     
     if auto_calc:
-        spec_nominal = st.number_input("成品名義尺寸目標 (已自動連動)", value=total_nom_sum, format="%.3f", disabled=True)
+        # 使用 st.session_state 或直接賦值，確保連動同步
+        spec_nominal = total_nom_sum
+        st.write(f"成品目標尺寸: {spec_nominal:.3f}")
     else:
-        spec_nominal = st.number_input("成品名義尺寸目標 (手動設定)", value=total_nom_sum, step=0.1, format="%.3f")
+        spec_nominal = st.number_input("成品名義尺寸目標", value=total_nom_sum, step=0.1, format="%.3f")
         
     spec_upper_limit = st.number_input("成品允收上公差 (+)", value=0.20, min_value=0.0, step=0.01, format="%.3f")
     spec_lower_limit = st.number_input("成品允收下公差 (-)", value=0.20, min_value=0.0, step=0.01, format="%.3f")
@@ -67,12 +68,17 @@ if st.button("🚀 執行對比分析", type="primary"):
     mean_shift = total_nom - spec_nominal
     
     # Cpk 與 良率
-    cpk_u = (spec_upper_limit - mean_shift) / (3 * total_sigma_u)
-    cpk_l = (spec_lower_limit + mean_shift) / (3 * total_sigma_l)
+    # 避免除以 0
+    tsu = max(total_sigma_u, 0.000001)
+    tsl = max(total_sigma_l, 0.000001)
+    
+    cpk_u = (spec_upper_limit - mean_shift) / (3 * tsu)
+    cpk_l = (spec_lower_limit + mean_shift) / (3 * tsl)
     final_cpk = min(cpk_u, cpk_l)
     
-    yield_u = norm.cdf(spec_upper_limit, mean_shift, total_sigma_u)
-    yield_l = norm.cdf(-spec_lower_limit, mean_shift, total_sigma_l)
+    # 修正良率計算公式
+    yield_u = norm.cdf(spec_upper_limit, mean_shift, tsu)
+    yield_l = norm.cdf(-spec_lower_limit, mean_shift, tsl)
     total_yield = (yield_u - yield_l) * 100
 
     # 4. 結果顯示
@@ -82,17 +88,37 @@ if st.button("🚀 執行對比分析", type="primary"):
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("零件總名義尺寸", f"{total_nom:.3f} mm")
     c2.metric("預估 Cpk", f"{final_cpk:.3f}")
-    c3.metric("預估良率", f"{total_yield:.4f} %")
+    c3.metric("預估良率", f"{max(0, total_yield):.4f} %")
     
-    is_wc_ok = (total_nom + wc_upper <= USL + 0.00001) and (total_nom - wc_lower >= LSL - 0.00001)
+    # 判定 Worst Case
+    is_wc_ok = (total_nom + wc_upper <= USL + 0.0001) and (total_nom - wc_lower >= LSL - 0.0001)
     c4.metric("Worst Case 判定", "通過" if is_wc_ok else "超出規格", delta_color="normal" if is_wc_ok else "inverse")
 
     # 5. 繪圖
     st.subheader("3. 尺寸分佈對比圖")
-    plot_range = max(wc_upper, wc_lower, spec_upper_limit, spec_lower_limit) * 1.5
-    x = np.linspace(total_nom - plot_range, total_nom + plot_range, 500)
-    y = np.where(x < total_nom, norm.pdf(x, total_nom, total_sigma_l), norm.pdf(x, total_nom, total_sigma_u))
+    
+    # 設定 X 軸範圍
+    display_sigma = max(tsu, tsl)
+    plot_min = min(LSL, total_nom - 4 * display_sigma)
+    plot_max = max(USL, total_nom + 4 * display_sigma)
+    x = np.linspace(plot_min, plot_max, 500)
+    
+    # 非對稱分佈曲線
+    y = np.where(x < total_nom, norm.pdf(x, total_nom, tsl), norm.pdf(x, total_nom, tsu))
     
     fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(x, y, color='#2E86C1', lw=2)
-    ax.fill_
+    ax.plot(x, y, color='#2E86C1', lw=2, label='Assembly Distribution')
+    # 確保這裡寫完整: fill_between
+    ax.fill_between(x, y, alpha=0.2, color='#2E86C1')
+    
+    # 標示成品規格界限
+    ax.axvline(USL, color='red', lw=2, linestyle='-', label=f'Spec Upper ({USL:.3f})')
+    ax.axvline(LSL, color='red', lw=2, linestyle='-', label=f'Spec Lower ({LSL:.3f})')
+    
+    # 標示名義尺寸位置
+    ax.axvline(total_nom, color='gray', lw=1, linestyle='--', label='Mean')
+
+    ax.set_title("Assembly Distribution vs. Product Spec Limits")
+    ax.set_xlabel("Dimension (mm)")
+    ax.legend()
+    st.pyplot(fig)
